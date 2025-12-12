@@ -91,4 +91,4 @@ define region ROM_region = mem:[from __ICFEDIT_region_ROM_start__ to __ICFEDIT_r
 Использование современных сред разработки, таких как IAR Embedded Workbench, значительно упрощает и автоматизирует эти процессы, позволяя сосредоточиться на логике приложения.
 
 === Подключение платы к ПК
-image:Figa1.jpg[]
+image:figa1.jpg[]
