@@ -1,3 +1,5 @@
+[source,cpp]
+----
 @startuml
 
 !theme plain
@@ -109,3 +111,4 @@ CommonMode "1" o-- "*" ILedOnOff : mLedsOnOff
 
 
 @enduml
+----
