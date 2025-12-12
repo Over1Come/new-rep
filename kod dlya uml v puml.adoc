@@ -1,0 +1,111 @@
+@startuml
+
+!theme plain
+
+' ===== ИНТЕРФЕЙСЫ =====
+
+interface IButton {
+  + {abstract} WasPressed() : bool
+}
+
+interface IController {
+  + {abstract} SwitchMode()
+  + {abstract} RunCurrentMode()
+}
+
+interface IMode {
+  + {abstract} Init()
+  + {abstract} Execute()
+}
+
+interface ILedToggable {
+  + {abstract} Toggle()
+}
+
+interface ILedOnOff {
+  + {abstract} On()
+  + {abstract} Off()
+}
+
+' ===== КОНКРЕТНЫЕ КЛАССЫ =====
+
+class UserButton {
+  - mRegisterAddress : uint32_t
+  - mPinNum : uint32_t
+  + UserButton(pinNum: uint32_t, registerAddress: uint32_t)
+  + WasPressed() : bool
+}
+
+class Led {
+  - mPinNum : uint32_t
+  - mRegisterPtr : uint32_t* const
+  + Led(pinNum: uint32_t, registerAddress: uint32_t)
+  + Toggle()
+  + On()
+  + Off()
+}
+
+class OptimizedLed <registerAddress, pinNum> {
+  + Toggle()
+  + On()
+  + Off()
+}
+
+class ModeController {
+  - mModes : tModes
+  - mCurrentMode : uint32_t
+  + ModeController(modes: const tModes&)
+  + SwitchMode()
+  + RunCurrentMode()
+}
+
+class CommonMode {
+  # mLeds : const tLeds&
+  # mLedsOnOff : const tLedsOnOff&
+  # mCurrentLedNumber : uint32_t
+  + CommonMode(leds: const tLeds&, ledsOnOff: const tLedsOnOff&)
+  + Init()
+}
+
+class RunningLightMode {
+  + RunningLightMode(leds: const tLeds&, ledsOnOff: const tLedsOnOff&)
+  + Execute()
+}
+
+class FadeGlowMode {
+  + FadeGlowMode(leds: const tLeds&, ledsOnOff: const tLedsOnOff&)
+  + Execute()
+}
+
+class ChessMode {
+  - oddPhase : bool = false
+  + ChessMode(leds: const tLeds&, ledsOnOff: const tLedsOnOff&)
+  + Execute()
+}
+
+' ===== НАСЛЕДОВАНИЕ =====
+
+UserButton -up-|> IButton
+ModeController -up-|> IController
+
+Led -up-|> ILedToggable
+Led -up-|> ILedOnOff
+
+OptimizedLed -up-|> ILedToggable
+OptimizedLed -up-|> ILedOnOff
+
+CommonMode -up-|> IMode
+RunningLightMode -up-|> CommonMode
+FadeGlowMode -up-|> CommonMode
+ChessMode -up-|> CommonMode
+
+' ===== КОМПОЗИЦИЯ/АГРЕГАЦИЯ =====
+
+ModeController "1" o-- "modesCount" IMode : mModes
+CommonMode "1" o-- "*" ILedToggable : mLeds
+CommonMode "1" o-- "*" ILedOnOff : mLedsOnOff
+
+
+
+
+@enduml
