@@ -1,7 +1,7 @@
 = Лабораторная работа №6
 :toc: 
 :toc-title: 
-:figure-caption: 
+:figure-caption: Рисунок
 :source-highlighter: 
 
 include::Titulnik.adoc[]
@@ -11,7 +11,7 @@ toc::[]
 == Цель работы
 1. Разобраться почему не работает кнопка.
 2. Вместо системного таймера подключить таймер TIM2.
-3. Изучить и описать как реализовать настройку системы тактирования микроконтроллера STM32F411RE на внешний и внутренний источник тактирования PLL.
+3. Изучить и описать как реализовать настройку системы тактирования микроконтроллера STM32F411RE на внешний и внутренний источник тактирования.
 4. Добавить про порты ввода-вывода (GPIO) для управления периферией их настройку, как они работают и зачем нужны.
 5. Не отчислиться (опционально).
 
@@ -20,142 +20,123 @@ toc::[]
 
 == 2. Замена системного таймера на TIM2
 
-=== 2.1 Что добавлено в коде
+=== 2.1 Как мы настроили TIM2
 
-В функции "__low_level_init()" добавлена одна строчка:
+Первым делом в функции *__low_level_init()* добавили вот эту строчку:
 [source,c++]
 ----
-RCC::APB1ENR::TIM2EN::Enable::Set();  // Включение тактирования таймера TIM2
+RCC::APB1ENR::TIM2EN::Enable::Set();  // Включили таймер TIM2
 ----
-В микроконтроллерах STM32 для экономии энергии все периферийные модули по умолчанию отключены. Эта команда "включает питание" для таймера TIM2, позволяя ему работать. Без этой строки любые попытки работы с TIM2 приведут к ошибке.
+В STM32 все железки по умолчанию выключены, чтобы не жрали батарейку. Так что если не включить таймер — он просто не будет работать.
 
-Добавлена новая функция `tim2_delay()`, которая полностью заменяет все предыдущие реализации задержек:
-[source,c++]
+Потом сделали две функции:
+[source,cpp]
 ----
-void tim2_delay(std::uint32_t milliseconds)
+// Проверяет, прошло ли время
+bool IsTimeoutExpired()
 {
-  // 1. Указываем, что прерывание генерируется только по переполнению
-  TIM2::CR1::URS::OverflowEvent::Set();
-  
-  // 2. Настраиваем предделитель: 31999 дает частоту 1 кГц при 32 МГц
-  TIM2::PSC::Write(31999U);
-  
-  // 3. Устанавливаем период работы таймера (сколько миллисекунд ждать)
-  TIM2::ARR::Write(milliseconds - 1U);
-  
-  // 4. Сбрасываем флаг прерывания (на всякий случай)
-  TIM2::SR::UIF::NoInterruptPending::Set();
-  
-  // 5. Обнуляем счетчик таймера
-  TIM2::CNT::Write(0);
-  
-  // 6. Включаем таймер (он начинает отсчет)
-  TIM2::CR1::CEN::Enable::Set();
-  
-  // 7. Ждем, пока таймер не досчитает до нужного значения
-  while (!TIM2::SR::UIF::InterruptPending::IsSet())
+  if (TIM2::SR::UIF::InterruptPending::IsSet()) // Если флаг поднят
   {
-    // Пустой цикл ожидания
+    TIM2::SR::UIF::Set(0); // Опускаем флажок
+    return true; // Говорим, что время вышло
   }
-  
-  // 8. Выключаем таймер
-  TIM2::CR1::CEN::Disable::Set();
+  return false; // Время еще не вышло
+}
+
+// Ставит таймер на нужное время
+void SetTimeout(std::uint32_t delayInms)
+{
+  TIM2::PSC::Set(timPresc - 1U); // Настраиваем делитель частоты
+  TIM2::ARR::Write(delayInms * timPeriod); // Говорим, сколько тиков ждать
+  TIM2::SR::UIF::Set(0); // Сбрасываем флаг (на всякий случай)
+  TIM2::CNT::Set(0); // Обнуляем счетчик
+  TIM2::CR1::CEN::Set(1); // Запускаем таймер
 }
 ----
 
-В главном цикле `main()` задержка теперь реализуется через TIM2:
-
-[source,c++]
+В главной программе используем это так:
+[source,cpp]
 ----
-for(;;)
-{   
-  if (userButton.WasPressed())
-  {   
-    modeController.SwitchMode(); 
-  }
-  modeController.RunCurrentMode(); 
-  
-  // Используем TIM2 для создания задержки 500 мс
-  tim2_delay(500);
+SetTimeout(200U); // Поставили таймер на 200 мс
+
+for(;;) // Бесконечный цикл
+{  
+  if (IsTimeoutExpired()) // Каждые 200 мс здесь будет true
+  {
+    if (userButton.WasPressed()) // Проверяем кнопку
+    {
+      modeController.SwitchMode(); // Меняем режим мигания
+    }
+    modeController.RunCurrentMode(); // Делаем что должен делать текущий режим
+  } 
 }
 ----
 
-=== 2.2 Как по факту все это работает
+=== 2.2 Как это все работает на пальцах
 
-1. *Настройка частоты*: При SystemCoreClock = 32 МГц, предделитель 31999 делит частоту до 1000 Гц (1 кГц). Это значит, что таймер делает один "тик" каждую миллисекунду.
+1. *Частота*: У нас процессор работает на 16 МГц (HSI). Мы не стали его делить, так что таймер тоже тикает 16 миллионов раз в секунду.
 
-2. *Расчет времени*: Если мы хотим задержку 500 мс, то в регистр ARR записываем 499. Таймер будет считать от 0 до 499, что займет 500 тиков × 1 мс = 500 мс.
+2. *Считаем тики*: Для 1 мс нужно 16,000 тиков (16,000,000 / 1000). Вот откуда взялось число 15,999 в формуле — потому что счет начинается с нуля.
 
-3. *Механизм ожидания*: Программа входит в цикл `while` и ждет, пока таймер не установит флаг. Как только таймер досчитывает до заданного значения, флаг устанавливается, и программа продолжает работу.
+3. *Ставим будильник*: Когда мы говорим *SetTimeout(200)*, таймеру говорим: "Проснись через 200 × 16,000 = 3,200,000 тиков". Это как завести механический будильник.
 
-4. *Режим однократного запуска*: После каждой задержки таймер выключается (CEN::Disable). Это позволяет точно контролировать каждый временной интервал.
+4. *Ждем звонка*: Таймер тикает, тикает, и когда досчитывает до нужного числа — поднимает флажок (UIF). Мы в основном цикле постоянно спрашиваем: "Флажок поднят?" Когда видим, что поднят — опускаем его и делаем свои дела.
+
+5. *Фишка*: Раньше мы каждый раз заводили и останавливали таймер. Сейчас он работает постоянно, просто мы смотрим на него каждые 200 мс. Это как часы на руке — они всегда идут, а мы просто смотрим на них, когда нужно.
+
+6. *Про кнопку*: Мы проверяем кнопку не постоянно, а раз в 200 мс. Это достаточно часто, чтобы пользователь не заметил задержку, и достаточно редко, чтобы не ловить дребезг контактов.
 
 == 3. Настройка системы тактирования
 
-В микроконтроллере STM32F411RE система тактирования может использовать внутренний (HSI) или внешний (HSE) источник частоты, а также умножать её через PLL. Вообще есть еще LSI и LSE, но это уже совсем другая история.
+=== 3.1 Использование внутреннего генератора HSI
+Программа использует внутренний RC-генератор HSI на частоте 16 МГц:
 
-image::clock tree.jpg[]
-
-=== 3.1 Настройка PLL и подключение HSE
-
-В функции инициализации __low_level_init() была реализована следующая последовательность:
-
-Включение внешнего кварца (HSE) - используется 8 МГц резонатор на плате.
-Переключение системы на HSE - выбираем внешний источник как основной.
-Настройка PLL - умножаем частоту для получения 32 МГц системной частоты:
-
-Делитель M = 2 (8 МГц / 2 = 4 МГц)
-
-Множитель N = 64 (4 МГц × 64 = 256 МГц)
-
-Делитель P = 8 (256 МГц / 8 = 32 МГц)
-
-Включение PLL и ожидание готовности
-
-Переключение системы на PLL - теперь процессор работает на 32 МГц.
-
-**формулы для расчетов M,N,P:**
-
-image::настройка частоты pll.jpg[]
-
-Когда мы написали код и настроили PLL, то столкнулись с проблемой что ничего не работает, точно уже не помню как было. Поломав голову, как-то додумались что проблема была здесь:
-[source,c++]
+[source,cpp]
 ----
-    using PLLQ0 = RCC_PLLCFGR_PLLQ_Values<RCC::PLLCFGR, 24, 4, ReadWriteMode, RCCPLLCFGRBase> ;
-    using PLLSRC = RCC_PLLCFGR_PLLSRC_Values<RCC::PLLCFGR, 22, 1, ReadWriteMode, RCCPLLCFGRBase> ;
-    using PLLP = RCC_PLLCFGR_PLLP_Values<RCC::PLLCFGR, 16, 2, ReadWriteMode, RCCPLLCFGRBase> ;
-    using PLLN = RCC_PLLCFGR_PLLN_Values<RCC::PLLCFGR, 6, 9, ReadWriteMode, RCCPLLCFGRBase> ;
-    using PLLM = RCC_PLLCFGR_PLLM_Values<RCC::PLLCFGR, 0, 5, ReadWriteMode, RCCPLLCFGRBase> ;
+const std::uint32_t SystemCoreClock = 16000000U; // HSI частота
 ----
-В поле PLLM почему-то были значения 0,0, хотя должно быть 0,5, то есть 6 бит. Мы это поправили и все заработало.
 
-Код для подключение HSE и настройки PLL:
+Настройка в функции __low_level_init():
+[source,cpp]
+----
+RCC::CR::HSION::On::Set();
+while (RCC::CR::HSIRDY::NotReady::IsSet()) {}
+RCC::CFGR::SW::Hsi::Set();
+while (!RCC::CFGR::SWS::Hsi::IsSet()) {}
+----
 
-**Включение и настройка внешнего кварца**:
+=== 3.2 Включение и настройка внешнего кварца (если бы использовали его)
 
-[source,c++]
+[source,cpp]
 ----
 RCC::CR::HSEON::On::Set();
 while (RCC::CR::HSERDY::NotReady::IsSet()) {}
 ----
 Включает внешний кварцевый генератор на 8 МГц и ждёт, пока он стабилизируется
 
-[source,c++]
+[source,cpp]
 ----
 RCC::CFGR::SW::Hse::Set();
 while (!RCC::CFGR::SWS::Hse::IsSet()) {}
 ----
 Переключает систему на работу от HSE и ждёт подтверждения переключения.
 
-[source,c++]
+[source,cpp]
 ----
 RCC::CR::HSION::Off::Set();
 ----
 Выключает внутренний RC-генератор HSI (16 МГц), чтобы экономить энергию, так как теперь используем внешний кварц.
 
-**Настройка PLL**:
+=== 3.3 Настройка PLL (если делать через него)
+Делитель M = 2 (8 МГц / 2 = 4 МГц)
 
-[source,c++]
+Множитель N = 64 (4 МГц × 64 = 256 МГц)
+
+Делитель P = 8 (256 МГц / 8 = 32 МГц)
+
+.формулы для расчетов M,N,P
+image::настройка частоты pll.jpg[]
+[source,cpp]
 ----
 RCC::PLLCFGR::PLLM::Set(2U);     // M = 2 
 RCC::PLLCFGR::PLLN::Set(64U);    // N = 64 
@@ -164,46 +145,15 @@ RCC::PLLCFGR::PLLP::Set(3U);     // P = 8
 
 **Переключение на PLL**:
 
-[source,c++]
+[source,cpp]
 ----
 RCC::CFGR::SW::Pll::Set();
 while (!RCC::CFGR::SWS::Pll::IsSet()) {}
 ----
 Переключает систему на работу от PLL (32 МГц) и ждёт подтверждения.
 
-=== 3.2 Подключение HSI
-
-В нашей лабораторной работе мы использовали HSE, но если бы использовали HSI, изменения были бы минимальны:
-
-**Было (HSE):**
-
-[source,c++]
-----
-RCC::CR::HSEON::On::Set();          // Включаем ВНЕШНИЙ кварц
-while (RCC::CR::HSERDY::NotReady::IsSet()) {} // Ждём его готовности
-RCC::CR::HSION::Off::Set();         // Выключаем ВНУТРЕННИЙ генератор
-RCC::PLLCFGR::PLLSRC::HseSource::Set(); // PLL работает от HSE
-RCC::PLLCFGR::PLLM::Set(2U);        // Делитель для 8 МГц HSE
-----
-**Стало бы с HSI:**
-
-[source,c++]
-----
-RCC::CR::HSION::On::Set();          // Включаем ВНУТРЕННИЙ генератор  
-while (RCC::CR::HSIRDY::NotReady::IsSet()) {} // Ждём его готовности
-RCC::CR::HSEON::Off::Set();         // Выключаем ВНЕШНИЙ кварц
-RCC::PLLCFGR::PLLSRC::HsiSource::Set(); // PLL работает от HSI
-RCC::PLLCFGR::PLLM::Set(8U);        // Делитель для 16 МГц HSI
-----
-
-**Основные отличия:**
-
-HSE требует внешнего кварца, HSI - нет
-
-HSE точнее (±0.5%), HSI менее точен (±1%)
-
-Для PLL нужны разные делители (PLLM=2 для HSE, PLLM=8 для HSI)
-
+.Система тактирования
+image::clock tree.jpg[]
 == 4. Порты ввода/вывода (GPIO)
 
 === 4.1 Режимы работы портов
@@ -213,8 +163,6 @@ HSE точнее (±0.5%), HSI менее точен (±1%)
 - **Вход** (аналоговый, цифровой с подтяжкой к питанию/земле)
 - **Выход** (Push-Pull, Open-Drain)
 - **Альтернативная функция** (для таймеров, UART, SPI и др.)
-
-*Рисунок 2.1: Режимы работы GPIO*
 
 === 4.2 Регистры управления
 
@@ -247,150 +195,150 @@ GPIOC::OSPEEDR::OSPEEDR5::VeryHigh::Set();
 GPIOC::ODR::ODR5::High::Set();
 ----
 
-=== 4.3 Подтяжка входов
-
-Чтобы избежать «плавающих» состояний, входы подтягивают к питанию или земле:
-
-[source,cpp]
-----
-// Подтяжка к питанию (pull-up)
-GPIOC::PUPDR::PUPDR5::PullUp::Set();
-
-// Подтяжка к земле (pull-down)
-GPIOC::PUPDR::PUPDR5::PullDown::Set();
-
-// Без подтяжки
-GPIOC::PUPDR::PUPDR5::NoPull::Set();
-----
-
 == ВЫВОД
 Разобрались почему не работала кнопка, подключили TIM2, вроде работает. Описал систему тактирования на внутреннем и внешнем источниках. Про порты тоже написал.
 
 
 == Приложение: исходный код
 
-== Файл `main.cpp` для подключения TIM2
+=== Файл main.cpp для подключения TIM2
 
 [source,cpp]
 ----
-#include "iostream" 
-#include "rccregisters.hpp" 
-#include "gpioaregisters.hpp" 
-#include "gpiocregisters.hpp" 
-#include <array> 
-#include "Led.h" 
-#include "OptimizedLed.h" 
-#include "CommonMode.h"
-#include "RunningLightMode.h"
-#include "FadeGlowMode.h"
-#include "ChessMode.h"
-#include "UserButton.h"
-#include "ModeController.h"
-#include "tim2registers.hpp" 
+#include "iostream"//for std::cout
+#include "rccregisters.hpp" // for RCC
+#include "gpioaregisters.hpp" // for GPIOA
+#include "gpiocregisters.hpp" // for GPIOС
+#include <array>// for std::array
+#include "UserButton.h" // for IButton, UserButton
+#include "ModeController.h" // for IController, ModeController
+#include "ModeConfig.h" // for modes
+#include "stkregisters.hpp" // for stk (system timer)
+#include "tim2registers.hpp" // for tim2
 
-std::uint32_t SystemCoreClock = 32'000'000U;
-
-extern "C"
-{
+const std::uint32_t SystemCoreClock = 16000000U; // hsi
+const std::uint32_t ticks = SystemCoreClock/1000U-1U;
+const std::uint16_t  timPresc = 1U;
+const std::uint32_t timPeriod = SystemCoreClock/(timPresc*1000U)-1U;
+extern "C" {
 int __low_level_init(void)
 {
- 
-  RCC::CR::HSEON::On::Set();
+  RCC::CR::HSION::On::Set();
+  while (RCC::CR::HSIRDY::NotReady::IsSet())
+  {
+
+  }
+  //Switch system clock on external oscillator
+  RCC::CFGR::SW::Hsi::Set();
+  while (!RCC::CFGR::SWS::Hsi::IsSet())
+  {
+
+  }
+  //Switch on external 8 MHz oscillator
+  /*RCC::CR::HSEON::On::Set();
   while (RCC::CR::HSERDY::NotReady::IsSet())
   {
+
   }
+  //Switch system clock on external oscillator
   RCC::CFGR::SW::Hse::Set();
   while (!RCC::CFGR::SWS::Hse::IsSet())
   {
-  }  
+
+  }
   RCC::CR::HSION::Off::Set();
-  RCC::PLLCFGR::PLLSRC::HseSource::Set(); 
-  RCC::PLLCFGR::PLLM::Set(2U);     // M = 2 
-  RCC::PLLCFGR::PLLN::Set(64U);    // N = 64 
-  RCC::PLLCFGR::PLLP::Set(3U);     // P = 8 
-  RCC::CR::PLLON::On::Set();
+
+  RCC::PLLCFGR::PLLSRC::HseSource::Set();
+  
+  RCC::PLLCFGR::PLLN0::Set(64); // n = 64
+  RCC::PLLCFGR::PLLP0::Set(3); // p = 8
+  RCC::PLLCFGR::FieldValues::Set(2); // m = 2
+  
+ RCC::CR::PLLON::On::Set();
   while (RCC::CR::PLLRDY::Unclocked::IsSet())
   {
+
   }
   RCC::CFGR::SW::Pll::Set();
   while (!RCC::CFGR::SWS::Pll::IsSet())
   {
-  }
-  RCC::APB2ENR::SYSCFGEN::Enable::Set();
+
+  } //чтобы подключить pll на 32 МГц*/
   
- 
+//  STK::LOAD::RELOAD::Set(ticks);
+//  STK::VAL::Write(0);
+//  STK::CTRL::CLKSOURCE::Set(0);
+//  STK::CTRL::ENABLE::Enable::Set();
+  
   RCC::APB1ENR::TIM2EN::Enable::Set();
+  
+  
+  RCC::APB2ENR::SYSCFGEN::Enable::Set();
+
   return 1;
 }
 }
-void tim2_delay(std::uint32_t milliseconds)
+
+bool IsTimeoutExpired()
 {
-  TIM2::CR1::URS::OverflowEvent::Set();
-  TIM2::PSC::Write(31999U); 
-  TIM2::ARR::Write(milliseconds - 1U);
-  TIM2::SR::UIF::NoInterruptPending::Set();
-  TIM2::CNT::Write(0);
-  TIM2::CR1::CEN::Enable::Set();
-  
-  while (!TIM2::SR::UIF::InterruptPending::IsSet())
-  {
-  }
-  TIM2::CR1::CEN::Disable::Set();
+  if (TIM2::SR::UIF::InterruptPending::IsSet())
+    {
+      TIM2::SR::UIF::Set(0);
+      return true;
+    }
+  return false;
 }
+
+void SetTimeout(std::uint32_t delayInms)
+{
+  TIM2::PSC::Set(timPresc - 1U);
+  TIM2::ARR::Write(delayInms * timPeriod); // T = 1*dealayInms
+  TIM2::SR::UIF::Set(0);
+  TIM2::CNT::Set(0);
+  TIM2::CR1::CEN::Set(1);
+}
+
+void delay(int cycles)
+{
+  for(int i = 0; i < cycles; ++i)    
+  {
+    asm volatile("");
+  }    
+}
+
 constexpr std::uint32_t buttonPinNum = 13;
 constexpr std::uint32_t portCIdrAddress = 0x40020810U;
 UserButton userButton(buttonPinNum, portCIdrAddress);
 
-Led led1(5, 0x40020814U);
-Led led2(8, 0x40020814U);
-Led led3(9, 0x40020814U);
-OptimizedLed<0x40020014U, 5> led4;
-
-tLeds leds = 
-{
-  &led1,
-  &led2,
-  &led3,
-  &led4
-};
-tLedsOnOff ledsOnOff = 
-{
-  &led1,
-  &led2,
-  &led3,
-  &led4
-};
-RunningLightMode runningLightMode(leds, ledsOnOff);
-FadeGlowMode fadeGlowMode(leds, ledsOnOff);
-ChessMode chessMode(leds, ledsOnOff);
-
-tModes modes
-{
-  &runningLightMode,
-  &fadeGlowMode,
-  &chessMode
-};
 ModeController modeController(modes);
 
 int main()
 { 
  
-  RCC::AHB1ENR::GPIOAEN::Enable::Set();
-  RCC::AHB1ENR::GPIOCEN::Enable::Set();
-  GPIOA::MODER::MODER5::Output::Set();
-  GPIOC::MODER::MODER5::Output::Set();
-  GPIOC::MODER::MODER8::Output::Set();
-  GPIOC::MODER::MODER9::Output::Set();
-  for(;;)
-  {   
-    if (userButton.WasPressed())
-    {   
-      modeController.SwitchMode(); 
-    }
-    modeController.RunCurrentMode(); 
-    tim2_delay(500); 
-  }
+  //Подать тактирование на порт А
+  RCC::AHB1ENR::GPIOAEN::Enable::Set() ;
+  //Подать тактирование на порт С
+  RCC::AHB1ENR::GPIOCEN::Enable::Set() ;
+  //Порта А.5 на вывод
+  GPIOA::MODER::MODER5::Output::Set() ;
+  //Порта C.5,C.8, C.9 на вывод
+  GPIOC::MODER::MODER5::Output::Set() ;
+  GPIOC::MODER::MODER8::Output::Set() ;
+  GPIOC::MODER::MODER9::Output::Set() ;
   
+  SetTimeout(200U);
+  
+  for(;;)
+  {  
+    if (IsTimeoutExpired())
+    {
+       if (userButton.WasPressed()) // 50 ms
+       {
+         modeController.SwitchMode(); 
+       }
+      modeController.RunCurrentMode();// 200ms
+    } 
+  }
   return 1;
 }
 ----
