@@ -1,0 +1,765 @@
+= Лабораторная работа №5
+:toc: macro
+:toc-title: Оглавление
+:figure-caption: Рисунок
+:source-highlighter: coderay
+
+include::Titulnik.adoc[]
+
+toc::[]
+
+== Цель и задачи исследования
+
+Основная цель работы — спроектировать и реализовать модульную программную систему для управления группой светодиодов с применением принципов объектно-ориентированного программирования. В рамках работы решались следующие задачи:
+
+* Выделение ключевых абстракций предметной области и их формализация в виде интерфейсов.
+* Проектирование слабосвязанных компонентов с чётким разделением обязанностей.
+* Реализация различных алгоритмов работы светодиодов с использованием паттерна Стратегия.
+* Организация кода в виде отдельных классов в файлах `.cpp` и `.h` с использованием абстрактных интерфейсов.
+
+== Общее описание системы
+
+Система представляет собой программный контроллер, управляющий набором светодиодов с возможностью переключения между несколькими режимами их работы. Архитектура построена на базе ООП-подхода, где каждый компонент отвечает за строго определённую функциональность.
+
+=== Основной алгоритм работы
+
+В бесконечном цикле системы выполняются следующие действия:
+
+1. Проверяется состояние пользовательской кнопки.
+2. При обнаружении нажатия происходит переключение на следующий режим работы.
+3. Выполняется текущий активный режим управления светодиодами.
+4. Вводится задержка для визуального восприятия.
+
+[source,cpp]
+----
+for(;;)
+{
+  if (userButton.WasPressed())
+  {
+    modeController.SwitchMode();
+  }
+  delay(500000);
+  modeController.RunCurrentMode();
+}
+----
+
+Реализованы три основных режима:
+
+* **RunningLightMode** — последовательное включение/выключение светодиодов («бегущий огонь»).
+* **FadeGlowMode** — синхронное мигание всех светодиодов.
+* **ChessMode** — попеременное включение светодиодов в шахматном порядке.
+
+Каждый режим инкапсулирует собственную логику и взаимодействует со светодиодами только через абстрактные интерфейсы, что обеспечивает лёгкую замену и расширение функционала.
+
+== Проектирование интерфейсов
+
+=== Минималистичный интерфейс `IButton`
+
+Интерфейс для работы с кнопкой был спроектирован с ориентацией на минимальную достаточность:
+
+[source,cpp]
+----
+class IButton {
+public:
+    virtual bool WasPressed() const = 0;
+};
+----
+
+Такой подход даёт следующие преимущества:
+
+* Упрощение портирования на разные аппаратные платформы.
+* Снижение связанности между модулями, что упрощает модульное тестирование.
+* Понятность и легкость реализации.
+
+=== Разделение интерфейсов управления светодиодами
+
+В ходе работы возникла необходимость в двух типах операций со светодиодами: переключение состояния и явное включение/выключение. Это привело к созданию двух отдельных интерфейсов:
+
+[source,cpp]
+----
+class ILedToggable {
+public:
+    virtual void Toggle() const = 0;
+};
+
+class ILedOnOff {
+public:
+    virtual void On() const = 0;
+    virtual void Off() const = 0;
+};
+----
+
+**Обоснование разделения:**
+
+1. Режим `RunningLightMode` использует только `Toggle()`.
+2. Режим `ChessMode` требует явного управления состоянием (`On()`/`Off()`).
+3. Соблюдается *Принцип разделения интерфейсов* (ISP), что позволяет классам реализовывать только нужные им методы.
+
+== Эволюция архитектуры
+
+Проектирование системы велось итеративно, начиная с монолитной реализации и постепенного выделения абстракций.
+
+=== Начальная реализация
+
+Первоначально весь код был сосредоточен в одном модуле, что приводило к:
+
+* Смешению логики управления железом и бизнес-логики.
+* Трудностям при добавлении новых режимов.
+* Низкой тестируемости.
+
+=== Выделение абстракций
+
+В процессе рефакторинга были выделены следующие ключевые сущности:
+
+1. **Управление светодиодами** (абстрагирование от аппаратной части).
+2. **Обработка пользовательского ввода** (кнопка).
+3. **Реализация режимов работы** (алгоритмы управления).
+
+=== Создание базового класса `CommonMode`
+
+При анализе кода режимов был обнаружен повторяющийся функционал, который был вынесен в базовый класс:
+
+* Хранение ссылок на светодиоды.
+* Отслеживание текущего активного светодиода.
+* Базовая реализация инициализации.
+
+Это устранило дублирование кода и упростило создание новых режимов.
+
+=== Внедрение паттерна *Стратегия*
+
+Различные режимы работы были переосмыслены как взаимозаменяемые алгоритмы, что привело к созданию единого интерфейса:
+
+[source,cpp]
+----
+class IMode {
+public:
+    virtual void Init() = 0;
+    virtual void Execute() = 0;
+};
+----
+
+Контроллер режимов был адаптирован для работы с этим интерфейсом:
+
+[source,cpp]
+----
+void ModeController::RunCurrentMode() {
+    mModes[mCurrentMode]->Execute();
+}
+----
+
+== Преимущества финальной архитектуры
+
+1. **Расширяемость** — новый режим добавляется созданием класса, реализующего `IMode`.
+2. **Тестируемость** — каждый режим может тестироваться изолированно.
+3. **Сопровождаемость** — логика режимов инкапсулирована.
+4. **Гибкость** — замена алгоритмов без изменения кода контроллера.
+
+== Диаграмма классов системы
+
+Ниже представлена UML-диаграмма, иллюстрирующая архитектуру системы. Она отражает:
+
+* Интерфейсы и их реализации.
+* Иерархию наследования (базовый класс `CommonMode`).
+* Отношения композиции и агрегации.
+* Применение принципов SOLID.
+
+[#UML-diagram]
+.**UML-диаграмма архитектуры системы**
+
+image::uml.png[]
+
+== Выводы
+
+Разработанная архитектура, представленная на рисунке выше, демонстрирует эффективное использование ООП-принципов во встраиваемых системах. Основные результаты:
+
+* Чёткое разделение ответственности между компонентами.
+* Минималистичные интерфейсы, ориентированные на конкретные задачи.
+* Гибкость и расширяемость за счёт паттерна *Стратегия*.
+* Улучшенная тестируемость и сопровождаемость кода.
+
+В приложении приведён полный исходный код системы.
+
+== Приложение: исходный код
+
+== Файл `main.cpp`
+
+[source,cpp]
+----
+#include "iostream"
+#include "rccregisters.hpp"
+#include "gpioaregisters.hpp"
+#include "gpiocregisters.hpp"
+#include <array>
+#include "Led.h"
+#include "OptimizedLed.h"
+#include "CommonMode.h"
+#include "RunningLightMode.h"
+#include "FadeGlowMode.h"
+#include "ChessMode.h"
+#include "UserButton.h"
+#include "ModeController.h"
+
+std::uint32_t SystemCoreClock = 16'000'000U;
+
+extern "C" {
+int __low_level_init(void)
+{
+  RCC::CR::HSION::On::Set();
+  while (RCC::CR::HSIRDY::NotReady::IsSet())
+  {
+  }
+  RCC::CFGR::SW::Hsi::Set();
+  while (!RCC::CFGR::SWS::Hsi::IsSet())
+  {
+  }
+
+  RCC::APB2ENR::SYSCFGEN::Enable::Set();
+  return 1;
+}
+}
+
+void delay(int cycles)
+{
+  for(int i = 0; i < cycles; ++i)
+  {
+    asm volatile("");
+  }
+}
+
+constexpr std::uint32_t buttonPinNum = 13;
+constexpr std::uint32_t portCIdrAddress = 0x40020810U;
+UserButton userButton(buttonPinNum, portCIdrAddress);
+
+Led led1(5, 0x40020814U);
+Led led2(8, 0x40020814U);
+Led led3(9, 0x40020814U);
+OptimizedLed<0x40020014U, 5> led4;
+
+tLeds leds =
+{
+  &led1,
+  &led2,
+  &led3,
+  &led4
+};
+
+tLedsOnOff ledsOnOff =
+{
+  &led1,
+  &led2,
+  &led3,
+  &led4
+};
+
+RunningLightMode runningLightMode(leds, ledsOnOff);
+FadeGlowMode fadeGlowMode(leds, ledsOnOff);
+ChessMode chessMode(leds, ledsOnOff);
+
+tModes modes
+{
+  &runningLightMode,
+  &fadeGlowMode,
+  &chessMode
+};
+
+ModeController modeController(modes);
+
+int main()
+{
+  RCC::AHB1ENR::GPIOAEN::Enable::Set() ;
+  RCC::AHB1ENR::GPIOCEN::Enable::Set() ;
+  GPIOA::MODER::MODER5::Output::Set() ;
+  GPIOC::MODER::MODER5::Output::Set() ;
+  GPIOC::MODER::MODER8::Output::Set() ;
+  GPIOC::MODER::MODER9::Output::Set() ;
+
+  for(;;)
+  {
+    if (userButton.WasPressed())
+    {
+      modeController.SwitchMode();
+    }
+    delay(500000);
+    modeController.RunCurrentMode();
+  }
+  return 1;
+}
+----
+
+=== Файл `IButton.h`
+
+[source,cpp]
+----
+#if !defined(IBUTTON_H)
+#define IBUTTON_H
+
+class IButton
+{
+public:
+    virtual bool WasPressed() const = 0;
+};
+
+#endif
+----
+
+=== Файл `UserButton.h`
+
+[source,cpp]
+----
+#if !defined(USERBUTTON_H)
+#define USERBUTTON_H
+
+#include "IButton.h"
+#include <cstdint>
+
+class UserButton : public IButton
+{
+public:
+    UserButton(std::uint32_t pinNum, std::uint32_t registerAddress);
+    bool WasPressed() const override;
+private:
+    std::uint32_t mRegisterAddress;
+    std::uint32_t mPinNum;
+};
+
+#endif
+----
+
+=== Файл `UserButton.cpp`
+
+[source,cpp]
+----
+#include "UserButton.h"
+#include <cstdint>
+
+UserButton::UserButton(std::uint32_t pinNum, std::uint32_t registerAddress)
+    : mPinNum(pinNum)
+    , mRegisterAddress(registerAddress)
+{
+}
+
+bool UserButton::WasPressed() const
+{
+    bool isButtonPressed =
+((*reinterpret_cast<std::uint32_t*>(mRegisterAddress) & (1U << mPinNum)) == 0);
+    return isButtonPressed;
+}
+----
+
+=== Файл `IController.h`
+
+[source,cpp]
+----
+#if !defined(ILEDTONOFF_H)
+#define ILEDTONOFF_H
+
+#include "ILedToggable.h"
+#include <array>
+#include <cstdint>
+
+class ILedOnOff
+{
+public:
+  virtual void On() const = 0;
+  virtual void Off() const = 0;
+};
+
+using tLedsOnOff = std::array<ILedOnOff*, ledsCount>;
+
+#endif
+----
+
+=== Файл `ModeController.h`
+
+[source,cpp]
+----
+#if !defined(MODECONTROLLER_H)
+#define MODECONTROLLER_H
+
+#include "IController.h"
+#include "IMode.h"
+#include <array>
+
+const std::uint32_t modesCount = 3;
+using tModes = std::array<IMode*, modesCount>;
+
+class ModeController : public IController
+{
+public:
+    ModeController(const tModes& modes);
+    void SwitchMode() override;
+    void RunCurrentMode() override;
+private:
+    const tModes mModes;
+    std::uint32_t mCurrentMode;
+};
+
+#endif
+----
+
+=== Файл `ModeController.cpp`
+
+[source,cpp]
+----
+#include <cassert>
+#include "ModeController.h"
+
+ModeController::ModeController(const tModes& modes):
+    mModes(modes),
+    mCurrentMode(0)
+{
+}
+
+void ModeController::SwitchMode()
+{
+    mCurrentMode++;
+    if (mCurrentMode == std::size(mModes))
+    {
+        mCurrentMode = 0;
+    }
+    mModes[mCurrentMode]->Init();
+}
+
+void ModeController::RunCurrentMode()
+{
+    mModes[mCurrentMode]->Execute();
+}
+----
+
+=== Файл `ILedOnOff.h`
+
+[source,cpp]
+----
+#if !defined(ILEDTONOFF_H)
+#define ILEDTONOFF_H
+
+#include "ILedToggable.h"
+#include <array>
+#include <cstdint>
+
+class ILedOnOff
+{
+public:
+  virtual void On() const = 0;
+  virtual void Off() const = 0;
+};
+
+using tLedsOnOff = std::array<ILedOnOff*, ledsCount>;
+
+#endif
+----
+
+=== Файл `ILedToggable.h`
+
+[source,cpp]
+----
+#if !defined(ILEDTOGGABLE_H)
+#define ILEDTOGGABLE_H
+
+#include <array>
+
+class ILedToggable
+{
+  public:
+    virtual void Toggle() const = 0;
+};
+
+const auto ledsCount = static_cast<std::size_t>(4);
+using tLeds = std::array<ILedToggable*, ledsCount>;
+
+#endif
+----
+
+=== Файл `Led.h`
+
+[source,cpp]
+----
+#if !defined(LED_H)
+#define LED_H
+
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+#include <cstdint>
+
+class Led: public ILedToggable, public ILedOnOff
+{
+  public:
+    Led(std::uint32_t pinNum, std::uint32_t registerAddress);
+    void Toggle() const override;
+    void On () const override;
+    void Off () const override;
+  private:
+    std::uint32_t mPinNum;
+    std::uint32_t* const mRegisterPtr;
+};
+
+#endif
+----
+
+=== Файл `Led.cpp`
+
+[source,cpp]
+----
+#include "Led.h"
+#include <cassert>
+
+Led::Led(std::uint32_t pinNum, std::uint32_t registerAddress):
+      mPinNum(pinNum),
+      mRegisterPtr(reinterpret_cast<std::uint32_t*>(registerAddress))
+{
+}
+
+void Led::Toggle() const
+{
+    assert(mPinNum <= 15);
+    *mRegisterPtr ^= (1 << mPinNum);
+}
+
+void Led::On () const
+{
+    *mRegisterPtr |= (1 << mPinNum);
+}
+
+void Led::Off () const
+{
+    *mRegisterPtr &= ~(1 << mPinNum);
+}
+----
+
+=== Файл `OptimizedLed.h`
+
+[source,cpp]
+----
+#if !defined(OPTIMIZEDLED_H)
+#define OPTIMIZEDLED_H
+
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+#include <cstdint>
+
+template <std::uint32_t registerAddress, std::uint32_t pinNum>
+class OptimizedLed: public ILedToggable, public ILedOnOff
+{
+public:
+  void Toggle() const override
+  {
+    static_assert(pinNum <= 15, "Номер пина не может быть больше 15");
+    auto const ptrRegister = reinterpret_cast<volatile std::uint32_t*>(registerAddress);
+    *ptrRegister ^= (1U << pinNum);
+  }
+
+  void On () const override
+  {
+    static_assert(pinNum <= 15, "Номер пина не может быть больше 15");
+    auto const ptrRegister = reinterpret_cast<volatile std::uint32_t*>(registerAddress);
+    *ptrRegister |= (1U << pinNum);
+  }
+
+  void Off () const override
+  {
+    static_assert(pinNum <= 15, "Номер пина не может быть больше 15");
+    auto const ptrRegister = reinterpret_cast<volatile std::uint32_t*>(registerAddress);
+    *ptrRegister &= ~(1U << pinNum);
+  }
+};
+
+#endif
+----
+
+=== Файл `ChessMode.h`
+
+[source,cpp]
+----
+#if !defined(CHESSMODE_H)
+#define CHESSMODE_H
+
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+#include <cstdint>
+#include "IMode.h"
+#include "CommonMode.h"
+#include <array>
+
+class ChessMode : public CommonMode
+{
+public:
+  ChessMode(const tLeds& leds, const tLedsOnOff& ledsOnOff);
+  void Execute() override;
+private:
+    bool oddPhase = false;
+};
+
+#endif
+----
+
+=== Файл `ChessMode.cpp`
+
+[source,cpp]
+----
+#include <cstdint>
+#include "ChessMode.h"
+
+ChessMode::ChessMode(const tLeds& leds, const tLedsOnOff& ledsOnOff):
+ CommonMode(leds, ledsOnOff)
+{
+}
+
+void ChessMode::Execute()
+{
+    for (std::size_t i = 0; i < std::size(mLeds); ++i)
+    {
+        if ((i % 2 == 0) == oddPhase)
+            mLedsOnOff[i]->On();
+        else
+            mLedsOnOff[i]->Off();
+    }
+    oddPhase = !oddPhase;
+}
+----
+
+=== Файл `CommonMode.h`
+
+[source,cpp]
+----
+#if !defined(COMMONMODE_H)
+#define COMMONMODE_H
+
+#include "IMode.h"
+#include <cstdint>
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+
+class CommonMode: public IMode
+{
+public:
+  CommonMode(const tLeds& leds, const tLedsOnOff& ledsOnOff);
+  void Init() override;
+protected:
+  const tLeds& mLeds;
+  const tLedsOnOff& mLedsOnOff;
+  std::uint32_t mCurrentLedNumber;
+};
+
+#endif
+----
+
+=== Файл `CommonMode.cpp`
+
+[source,cpp]
+----
+#include "CommonMode.h"
+#include "Led.h"
+#include <cassert>
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+
+CommonMode::CommonMode(const tLeds& leds, const tLedsOnOff& ledsOnOff):
+    mLeds(leds),
+    mLedsOnOff(ledsOnOff),
+    mCurrentLedNumber(0)
+{
+}
+
+void CommonMode::Init()
+{
+    mCurrentLedNumber = 0;
+    for (auto it: mLedsOnOff)
+    {
+        it->Off();
+    }
+}
+----
+
+=== Файл `FadeGlowMode.h`
+
+[source,cpp]
+----
+#if !defined(FADEGLOWMODE_H)
+#define FADEGLOWMODE_H
+
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+#include <cstdint>
+#include "IMode.h"
+#include "CommonMode.h"
+#include <array>
+
+class FadeGlowMode : public CommonMode
+{
+public:
+  FadeGlowMode(const tLeds& leds, const tLedsOnOff& ledsOnOff);
+    void Execute() override;
+};
+
+#endif
+----
+
+=== Файл `FadeGlowMode.cpp`
+
+[source,cpp]
+----
+#include <cstdint>
+#include "FadeGlowMode.h"
+
+FadeGlowMode::FadeGlowMode(const tLeds& leds, const tLedsOnOff& ledsOnOff):
+CommonMode(leds, ledsOnOff)
+{
+}
+
+void FadeGlowMode::Execute()
+{
+    for(auto it: mLeds)
+    {
+        mLeds[mCurrentLedNumber++]->Toggle();
+        if (mCurrentLedNumber == std::size(mLeds))
+        {
+            mCurrentLedNumber = 0;
+        }
+    }
+}
+----
+
+=== Файл `RunningLightMode.h`
+
+[source,cpp]
+----
+#if !defined(RUNNINGLIGHTMODE_H)
+#define RUNNINGLIGHTMODE_H
+
+#include "CommonMode.h"
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+
+class RunningLightMode : public CommonMode
+{
+public:
+  RunningLightMode(const tLeds& leds, const tLedsOnOff& ledsOnOff);
+  void Execute() override;
+};
+
+#endif
+----
+
+=== Файл `RunningLightMode.cpp`
+
+[source,cpp]
+----
+#include <cassert>
+#include "RunningLightMode.h"
+#include "ILedToggable.h"
+#include "ILedOnOff.h"
+
+RunningLightMode::RunningLightMode(const tLeds& leds, const tLedsOnOff& ledsOnOff):
+    CommonMode(leds, ledsOnOff)
+{
+}
+
+void RunningLightMode::RunningLightMode::Execute()
+{
+    mLeds[mCurrentLedNumber++]->Toggle();
+    if (mCurrentLedNumber == std::size(mLeds))
+    {
+        mCurrentLedNumber = 0;
+    }
+}
+----
